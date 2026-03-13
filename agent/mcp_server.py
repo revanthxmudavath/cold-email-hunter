@@ -11,7 +11,7 @@ import imaplib
 import json
 import logging
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -55,7 +55,11 @@ async def _load_contacted() -> dict:
     if not CONTACTED_PATH.exists():
         return {"contacts": []}
     async with aiofiles.open(CONTACTED_PATH) as f:
-        return json.loads(await f.read())
+        raw = await f.read()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ToolError(f"contacted.json is corrupted: {exc}. Fix or delete data/contacted.json.") from exc
 
 
 async def _save_contacted(data: dict) -> None:
@@ -63,7 +67,7 @@ async def _save_contacted(data: dict) -> None:
     tmp = CONTACTED_PATH.with_suffix(".tmp")
     async with aiofiles.open(tmp, "w") as f:
         await f.write(json.dumps(data, indent=2))
-    tmp.replace(CONTACTED_PATH)
+    await asyncio.get_running_loop().run_in_executor(None, tmp.replace, CONTACTED_PATH)
 
 
 # ── Tools ─────────────────────────────────────────────────────────────────────
@@ -91,7 +95,7 @@ async def lookup_email(first_name: str, last_name: str, domain: str) -> dict:
         resp.raise_for_status()
         return resp.json()
 
-    result = await asyncio.get_event_loop().run_in_executor(None, _call)
+    result = await asyncio.get_running_loop().run_in_executor(None, _call)
     data = result.get("data", {})
     return {
         "email": data.get("email"),
@@ -118,7 +122,7 @@ async def verify_email(email_address: str) -> dict:
         resp.raise_for_status()
         return resp.json()
 
-    result = await asyncio.get_event_loop().run_in_executor(None, _call)
+    result = await asyncio.get_running_loop().run_in_executor(None, _call)
     data = result.get("data", {})
     status = data.get("status", "unknown")
     return {
@@ -131,7 +135,7 @@ async def verify_email(email_address: str) -> dict:
 
 @mcp.tool()
 async def send_email(to: str, subject: str, body: str) -> dict:
-    """Send a cold email via Gmail SMTP. Returns {sent, to, subject}."""
+    """Send a cold email via Gmail SMTP. Body must be plain text (no HTML). Returns {sent, to, subject}."""
     cfg = await _load_config()
     gmail = cfg.get("gmail_address", "")
     app_pw = cfg.get("gmail_app_password", "")
@@ -146,14 +150,17 @@ async def send_email(to: str, subject: str, body: str) -> dict:
     msg["To"] = to
     msg.attach(MIMEText(body, "plain"))
 
-    await aiosmtplib.send(
-        msg,
-        hostname="smtp.gmail.com",
-        port=587,
-        start_tls=True,
-        username=gmail,
-        password=app_pw,
-    )
+    try:
+        await aiosmtplib.send(
+            msg,
+            hostname="smtp.gmail.com",
+            port=587,
+            start_tls=True,
+            username=gmail,
+            password=app_pw,
+        )
+    except Exception as exc:
+        raise ToolError(f"SMTP send failed: {exc}") from exc
     log.info(f"Sent email to {to}: {subject}")
     return {"sent": True, "to": to, "subject": subject}
 
@@ -166,34 +173,36 @@ async def check_replies() -> list:
     app_pw = cfg.get("gmail_app_password", "")
     if not gmail or gmail == "FILL_IN":
         raise ToolError("gmail_address not set in data/config.json")
+    if not app_pw or app_pw == "FILL_IN":
+        raise ToolError("gmail_app_password not set in data/config.json")
 
-    since = (datetime.now() - timedelta(days=30)).strftime("%d-%b-%Y")
+    since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%d-%b-%Y")
 
     def _fetch() -> list:
         replies = []
-        try:
-            mail = imaplib.IMAP4_SSL("imap.gmail.com")
-            mail.login(gmail, app_pw)
-            mail.select("inbox")
-            _, data = mail.search(None, f'(SINCE "{since}" NOT FROM "{gmail}")')
-            ids = (data[0].split() or [])[-20:]
-            for uid in ids:
-                _, msg_data = mail.fetch(uid, "(RFC822)")
-                msg = email_lib.message_from_bytes(msg_data[0][1])
-                if msg.get("In-Reply-To"):
-                    replies.append({
-                        "from": msg.get("From"),
-                        "subject": msg.get("Subject"),
-                        "date": msg.get("Date"),
-                        "in_reply_to": msg.get("In-Reply-To"),
-                    })
-            mail.close()
-            mail.logout()
-        except Exception as exc:
-            log.error(f"IMAP check_replies failed: {exc}", exc_info=True)
+        mail = imaplib.IMAP4_SSL("imap.gmail.com")
+        mail.login(gmail, app_pw)
+        mail.select("inbox")
+        _, data = mail.search(None, f'(SINCE "{since}" NOT FROM "{gmail}")')
+        ids = (data[0].split() or [])[-20:]
+        for uid in ids:
+            _, msg_data = mail.fetch(uid, "(RFC822)")
+            msg = email_lib.message_from_bytes(msg_data[0][1])
+            if msg.get("In-Reply-To"):
+                replies.append({
+                    "from": msg.get("From"),
+                    "subject": msg.get("Subject"),
+                    "date": msg.get("Date"),
+                    "in_reply_to": msg.get("In-Reply-To"),
+                })
+        mail.close()
+        mail.logout()
         return replies
 
-    return await asyncio.get_event_loop().run_in_executor(None, _fetch)
+    try:
+        return await asyncio.get_running_loop().run_in_executor(None, _fetch)
+    except Exception as exc:
+        raise ToolError(f"IMAP check_replies failed: {exc}") from exc
 
 
 @mcp.tool()
@@ -219,7 +228,7 @@ async def update_contacted_list(
         "contact_name": contact_name,
         "role": role,
         "job_url": job_url,
-        "sent_at": datetime.utcnow().isoformat(),
+        "sent_at": datetime.now(timezone.utc).isoformat(),
         "status": status,
     }
     data["contacts"].append(entry)
@@ -249,14 +258,17 @@ async def update_sheet(
         from google.oauth2.service_account import Credentials
         creds_path = BASE_DIR / "data" / "google_credentials.json"
         if not creds_path.exists():
-            raise ToolError("data/google_credentials.json not found for Sheets auth")
+            raise RuntimeError("data/google_credentials.json not found for Sheets auth")
         scopes = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = Credentials.from_service_account_file(str(creds_path), scopes=scopes)
         gc = gspread.authorize(creds)
         sheet = gc.open_by_key(sheet_id).sheet1
-        sheet.append_row([datetime.utcnow().strftime("%Y-%m-%d"), contact_name, company, role, email_address, job_url, status])
+        sheet.append_row([datetime.now(timezone.utc).strftime("%Y-%m-%d"), contact_name, company, role, email_address, job_url, status])
 
-    await asyncio.get_event_loop().run_in_executor(None, _append)
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, _append)
+    except RuntimeError as exc:
+        raise ToolError(str(exc)) from exc
     return {"updated": True, "company": company, "role": role}
 
 
@@ -273,7 +285,7 @@ async def notify_slack(message: str) -> dict:
         resp = requests.post(webhook, json={"text": message}, timeout=5)
         resp.raise_for_status()
 
-    await asyncio.get_event_loop().run_in_executor(None, _post)
+    await asyncio.get_running_loop().run_in_executor(None, _post)
     log.info("Slack notification sent")
     return {"sent": True}
 
