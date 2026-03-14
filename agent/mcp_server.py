@@ -290,6 +290,54 @@ async def notify_slack(message: str) -> dict:
     return {"sent": True}
 
 
+@mcp.tool()
+async def search_jobs(query: str, max_results: int = 10) -> list:
+    """
+    Find SWE job postings via Apify Indeed scraper (synchronous — no polling).
+    Returns list of {title, company, url, location, description}.
+    Jobs without a direct apply URL are pre-filtered out.
+    Single HTTP call — no polling loop needed.
+    """
+    cfg = await _load_config()
+    api_key = cfg.get("apify_token", "")
+    if not api_key or api_key == "FILL_IN":
+        raise ToolError("apify_token not set in data/config.json")
+
+    def _run() -> list:
+        from apify_client import ApifyClient
+        client = ApifyClient(api_key)
+        run = client.actor("borderline/indeed-scraper").call(
+            run_input={
+                "query": query,
+                "country": "us",
+                "maxRows": max_results,
+                "level": "entry_level",
+                "jobType": "fulltime",
+                "fromDays": "7",
+            },
+            timeout_secs=300,
+        )
+        if not run:
+            raise ToolError("Apify actor run returned no result")
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        jobs = []
+        for item in items:
+            url = item.get("applyUrl") or item.get("jobUrl") or ""
+            if not url:
+                continue
+            loc = item.get("location") or {}
+            jobs.append({
+                "title": item.get("title", ""),
+                "company": "",  # actor doesn't return company name; agent uses WebFetch
+                "url": url,
+                "location": loc.get("formattedAddressShort", "") if isinstance(loc, dict) else str(loc),
+                "description": (item.get("descriptionText") or "")[:400],
+            })
+        return jobs
+
+    return await asyncio.get_running_loop().run_in_executor(None, _run)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     mcp.run()
