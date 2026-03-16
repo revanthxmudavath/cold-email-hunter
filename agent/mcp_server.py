@@ -12,6 +12,8 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta, timezone
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
@@ -66,7 +68,7 @@ async def _save_contacted(data: dict) -> None:
     """Write data/contacted.json atomically via .tmp rename."""
     tmp = CONTACTED_PATH.with_suffix(".tmp")
     async with aiofiles.open(tmp, "w") as f:
-        await f.write(json.dumps(data, indent=2))
+        await f.write(json.dumps(data, indent=2) + "\n")
     await asyncio.get_running_loop().run_in_executor(None, tmp.replace, CONTACTED_PATH)
 
 
@@ -134,8 +136,8 @@ async def verify_email(email_address: str) -> dict:
 
 
 @mcp.tool()
-async def send_email(to: str, subject: str, body: str) -> dict:
-    """Send a cold email via Gmail SMTP. Body must be plain text (no HTML). Returns {sent, to, subject}."""
+async def send_email(to: str, subject: str, body: str, attachment_path: str = None) -> dict:
+    """Send a cold email via Gmail SMTP with optional PDF attachment. Body must be plain text (no HTML). Returns {sent, to, subject}."""
     cfg = await _load_config()
     gmail = cfg.get("gmail_address", "")
     app_pw = cfg.get("gmail_app_password", "")
@@ -144,11 +146,26 @@ async def send_email(to: str, subject: str, body: str) -> dict:
     if not app_pw or app_pw == "FILL_IN":
         raise ToolError("gmail_app_password not set in data/config.json")
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
     msg["From"] = f"Revanth Mudavath <{gmail}>"
     msg["To"] = to
     msg.attach(MIMEText(body, "plain"))
+
+    attachment_sent = False
+    if attachment_path:
+        full_path = BASE_DIR / attachment_path
+        if full_path.exists():
+            loop = asyncio.get_running_loop()
+            file_bytes = await loop.run_in_executor(None, full_path.read_bytes)
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(file_bytes)
+            encoders.encode_base64(part)
+            part.add_header("Content-Disposition", f'attachment; filename="{full_path.name}"')
+            msg.attach(part)
+            attachment_sent = True
+        else:
+            log.warning(f"Resume attachment not found: {full_path} — sending without attachment")
 
     try:
         await aiosmtplib.send(
@@ -162,7 +179,7 @@ async def send_email(to: str, subject: str, body: str) -> dict:
     except Exception as exc:
         raise ToolError(f"SMTP send failed: {exc}") from exc
     log.info(f"Sent email to {to}: {subject}")
-    return {"sent": True, "to": to, "subject": subject}
+    return {"sent": True, "to": to, "subject": subject, "attachment_sent": attachment_sent}
 
 
 @mcp.tool()
