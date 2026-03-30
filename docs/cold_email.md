@@ -15,9 +15,11 @@ Subject: [Role] at [Company]
 
 Hi [First Name],
 
-I'm Revanth, an MS CS student at Oregon State graduating June 2026. I've been following [Company] for a while and loved reading about [specific product / solution / practice they build or shipped recently]. Given my background in [area relevant to JD/company], I've always felt [Company] would be a great fit and I love how closely it aligns with what I've been building.
+I'm Revanth, a recent graduate with a Master's in Computer Science from Oregon State University (March 2026). I've been following [Company] for a while and loved reading about [specific product / solution / practice they build or shipped recently]. Given my background in [area relevant to JD/company], I've always felt [Company] would be a great fit and I love how closely it aligns with what I've been building.
 
-I recently came across your opening for [Role] in [Location] and wanted to reach out personally.
+I recently came across your opening for [Role] in [Location] and wanted to reach out personally. 
+
+Here are a few highlights from my experiences:
 
 - [Achievement 1 — matched to THIS specific JD]
 - [Achievement 2 — matched to THIS specific JD]
@@ -26,7 +28,7 @@ I recently came across your opening for [Role] in [Location] and wanted to reach
 Role I'm interested in: [Role]
 [Exact job URL]
 
-I'm attaching my resume, but I truly believe my experience maps closely to what this role needs. I'd love to speak further if you think I could be a good fit.
+I've attached my resume for your review. If my background sounds like a fit, I'd love to hear from you.
 
 Best,
 Revanth Mudavath

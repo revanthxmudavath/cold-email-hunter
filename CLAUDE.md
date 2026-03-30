@@ -66,7 +66,7 @@ No output = good. It waits on stdin for JSON-RPC messages.
 
 ## Candidate Profile
 
-Revanth Mudavath — MS CS @ Oregon State (GPA 4.0, graduating June 2026).
+Revanth Mudavath — MS CS @ Oregon State (GPA 4.0, March 2026).
 Target: new grad SWE / backend engineer roles.
 Key email bullets (in data/config.json `achievements` field):
 - 30+ REST API endpoints, 50K users (StylePilot.ai)
